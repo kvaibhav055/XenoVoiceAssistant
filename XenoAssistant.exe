@@ -1,0 +1,553 @@
+import pyttsx3
+import speech_recognition as sr
+import os
+import webbrowser
+import datetime
+import threading
+import requests
+import pyjokes
+import psutil
+import urllib.parse
+import re
+import time
+import json
+import pyautogui
+import pytesseract
+from PIL import Image
+from fuzzywuzzy import fuzz
+import subprocess
+import winreg
+import logging
+import sys
+from pytube import Search
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+
+# Global variables
+matching_files = []  # Stores the list of matching files
+assistant_running = False  # Tracks if the assistant is running
+
+# ✅ Initialize logging
+logging.basicConfig(filename='assistant.log', level=logging.INFO, format='%(asctime)s - %(message)s')
+
+# ✅ Initialize TTS
+engine = pyttsx3.init('sapi5')
+engine.setProperty('rate', 210)
+engine.setProperty('volume', 1.0)
+
+# ✅ Set voice gender
+def set_voice(gender="male"):
+    voices = engine.getProperty('voices')
+    if gender == "male":
+        engine.setProperty('voice', voices[0].id)
+    else:
+        engine.setProperty('voice', voices[1].id)
+
+set_voice("male")
+
+# ✅ Assistant Name
+ASSISTANT_NAME = "xeno"
+
+# ✅ Speak Function
+def speak(text):
+    """Converts text to speech."""
+    engine.say(text)
+    engine.runAndWait()
+
+# ✅ Listen to voice commands
+def listen(log_to_gui):
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        log_to_gui("Listening...")
+        recognizer.pause_threshold = 1
+        audio = recognizer.listen(source)
+
+    try:
+        command = recognizer.recognize_google(audio, language='en-in').lower()
+        log_to_gui(f"You said: {command}")
+        return command
+    except sr.UnknownValueError:
+        speak("I didn't catch that. Please repeat.")
+        return ""
+    except sr.RequestError:
+        speak("There seems to be a network issue.")
+        return ""
+
+# ✅ Wake-up Call
+WAKE_WORD = "xeno"
+
+def wait_for_wake_word(log_to_gui):
+    """Listens for the wake-up word before activating the assistant."""
+    log_to_gui("Waiting for wake-up call...")
+    while True:
+        command = listen(log_to_gui)
+        if WAKE_WORD in command:
+            speak("Command me!")
+            break
+
+# ✅ **Browser Handlers**
+def open_in_browser(url, browser="default", log_to_gui=None):
+    """Opens a URL in the specified browser or the default browser."""
+    try:
+        if browser == "edge":
+            edge_path = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+            if os.path.exists(edge_path):
+                webbrowser.register('edge', None, webbrowser.BackgroundBrowser(edge_path))
+                webbrowser.get('edge').open(url)
+            else:
+                speak("Microsoft Edge not found. Opening in the default browser.")
+                webbrowser.open(url)
+        elif browser == "brave":
+            brave_path = "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"
+            if os.path.exists(brave_path):
+                webbrowser.register('brave', None, webbrowser.BackgroundBrowser(brave_path))
+                webbrowser.get('brave').open(url)
+            else:
+                speak("Brave browser not found. Opening in the default browser.")
+                webbrowser.open(url)
+        elif browser == "chrome":
+            chrome_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+            if os.path.exists(chrome_path):
+                webbrowser.register('chrome', None, webbrowser.BackgroundBrowser(chrome_path))
+                webbrowser.get('chrome').open(url)
+            else:
+                speak("Google Chrome not found. Opening in the default browser.")
+                webbrowser.open(url)
+        else:
+            # Use the default browser
+            webbrowser.open(url)
+    except Exception as e:
+        if log_to_gui:
+            log_to_gui(f"Browser error: {e}")
+        speak("Couldn't open the browser.")
+
+# ✅ **Web Search with Selection**
+def web_search(query, log_to_gui):
+    """Performs a web search, opens the browser, and lets the user select a result to open."""
+    try:
+        speak(f"Searching the web for {query}")
+        search_url = f"https://duckduckgo.com/html/?q={urllib.parse.quote(query)}"
+        open_in_browser(search_url, browser="chrome", log_to_gui=log_to_gui)
+    except Exception as e:
+        log_to_gui(f"Web search error: {e}")
+        speak("Couldn't perform the web search.")
+
+# ✅ **YouTube Search with Selection**
+def youtube_search(query, log_to_gui):
+    """Search YouTube, open the browser, and let the user select a video to play."""
+    try:
+        speak(f"Searching YouTube for {query}")
+        search = Search(query)
+        videos = search.results[:5]  # Get the top 5 videos
+
+        if not videos:
+            speak("No videos found.")
+            return
+
+        # Open the browser with the YouTube search results in Brave
+        search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+        open_in_browser(search_url, browser="brave", log_to_gui=log_to_gui)
+    except Exception as e:
+        log_to_gui(f"YouTube search error: {e}")
+        speak("Couldn't fetch YouTube results.")
+
+# ✅ **Battery Status**
+def battery_status(log_to_gui):
+    """Announces the current battery status."""
+    try:
+        battery = psutil.sensors_battery()
+        percent = battery.percent
+        speak(f"Your system's battery is at {percent} percent.")
+    except Exception as e:
+        log_to_gui(f"Battery status error: {e}")
+        speak("Couldn't fetch battery status.")
+
+# ✅ **Get Current Time**
+def get_time():
+    """Announces the current time."""
+    now = datetime.datetime.now().strftime("%I:%M %p")
+    speak(f"The time is {now}")
+
+# ✅ **Random Joke**
+def tell_joke():
+    """Tells a random joke."""
+    joke = pyjokes.get_joke()
+    speak(joke)
+
+# ✅ **Find Executable Path**
+def find_executable(app_name):
+    """Find the full path of the .exe for the given app."""
+    search_dirs = [
+        os.environ['ProgramFiles'],
+        os.environ['ProgramFiles(x86)'],
+        os.path.expanduser('~\\AppData\\Local\\Programs'),
+        "C:\\Program Files",
+        "C:\\Program Files (x86)"
+    ]
+
+    for directory in search_dirs:
+        for root, _, files in os.walk(directory):
+            for file in files:
+                if file.lower().startswith(app_name.lower()) and file.endswith(".exe"):
+                    return os.path.join(root, file)
+
+    # Search in Windows Registry for installed apps
+    try:
+        registry_paths = [
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+        ]
+
+        for path in registry_paths:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as reg_key:
+                for i in range(winreg.QueryInfoKey(reg_key)[0]):
+                    sub_key_name = winreg.EnumKey(reg_key, i)
+                    with winreg.OpenKey(reg_key, sub_key_name) as sub_key:
+                        try:
+                            display_name = winreg.QueryValueEx(sub_key, "DisplayName")[0]
+                            install_location = winreg.QueryValueEx(sub_key, "InstallLocation")[0]
+
+                            if app_name.lower() in display_name.lower():
+                                for root, _, files in os.walk(install_location):
+                                    for file in files:
+                                        if file.lower().endswith(".exe"):
+                                            return os.path.join(root, file)
+                        except (FileNotFoundError, OSError):
+                            continue
+
+    except Exception as e:
+        log_to_gui(f"Registry search error: {e}")
+
+    return None
+
+# ✅ **Retry with .exe**
+def retry_with_exe(app_name):
+    """Appends .exe to the app name and searches again."""
+    app_name_with_exe = app_name + ".exe"
+    speak(f"Retrying with {app_name_with_exe}.")
+    return find_executable(app_name_with_exe)
+
+# ✅ **Open Application**
+def open_application(app_name, log_to_gui):
+    """Open any installed application dynamically with full path resolution."""
+    try:
+        speak(f"Searching for {app_name}.")
+        app_path = find_executable(app_name)
+
+        if not app_path:
+            app_path = retry_with_exe(app_name)
+
+        if app_path:
+            subprocess.Popen(app_path, shell=True)
+            speak(f"Opening {app_name}")
+        else:
+            speak("Application not found.")
+    except Exception as e:
+        log_to_gui(f"Error opening application: {e}")
+        speak("Failed to open the application.")
+
+# ✅ **Close Application**
+def close_application(app_name, log_to_gui):
+    """Close any running application by its name."""
+    try:
+        if not app_name.lower().endswith(".exe"):
+            app_name += ".exe"
+
+        speak(f"Searching for {app_name} to close.")
+
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                if proc.info['name'].lower() == app_name.lower():
+                    pid = proc.info['pid']
+                    os.kill(pid, 9)  # Forcefully terminate the process
+                    speak(f"Closed {app_name}.")
+                    return
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+
+        speak(f"{app_name} is not running.")
+    except Exception as e:
+        log_to_gui(f"Error closing application: {e}")
+        speak("Failed to close the application.")
+
+# ✅ **Send WhatsApp Message**
+def send_whatsapp_message(log_to_gui):
+    """Sends WhatsApp message using dynamic contacts and auto-sends it."""
+    try:
+        contacts_path = os.path.join(os.path.dirname(__file__), "contacts.json")
+
+        if not os.path.exists(contacts_path):
+            speak("Contacts file not found. Please create a contacts.json file in the same folder as this script.")
+            return
+
+        with open(contacts_path, "r") as f:
+            contacts = json.load(f)
+
+        speak("To whom should I send the message?")
+        recipient = listen(log_to_gui).strip()
+
+        if recipient not in contacts:
+            speak("Contact not found.")
+            return
+
+        phone_number = contacts[recipient]
+
+        speak("What message should I send?")
+        message = listen(log_to_gui).strip()
+
+        whatsapp_url = f"https://web.whatsapp.com/send?phone={phone_number}&text={urllib.parse.quote(message)}"
+        open_in_browser(whatsapp_url, browser="edge", log_to_gui=log_to_gui)
+
+        time.sleep(15)  # Wait for WhatsApp Web to load
+        pyautogui.press("enter")
+        time.sleep(2)
+
+        speak(f"Message sent to {recipient}.")
+
+    except json.JSONDecodeError:
+        log_to_gui("Invalid JSON format in contacts.json.")
+        speak("The contacts file is not properly formatted. Please check the file.")
+    except Exception as e:
+        log_to_gui(f"WhatsApp error: {e}")
+        speak("Failed to send the message.")
+
+# ✅ **Fuzzy Matching for NLU**
+def match_command(command):
+    """Match casual commands to actions using fuzzy matching."""
+    actions = {
+        "google": ["google", "search"],
+        "youtube": ["youtube", "search youtube", "play"],
+        "time": ["time", "current time"],
+        "battery": ["battery", "charge status"],
+        "joke": ["joke", "make me laugh"],
+        "exit": ["exit"],
+        "whatsapp": ["whatsapp", "send message"],
+        "open": ["open", "launch"],
+        "close": ["close", "kill the application"],
+        "local search": ["local search", "search locally", "find"],
+        "khatam": ["okk byy", "good night", "byy bro", "good night brother"]
+    }
+
+    for action, keywords in actions.items():
+        for keyword in keywords:
+            if fuzz.partial_ratio(command, keyword) > 70:
+                return action
+    return None
+
+# ✅ **Local Search**
+def local_search(keyword, log_to_gui):
+    """Search for files containing the keyword in common directories and list them in the terminal."""
+    global matching_files
+    matching_files = []  # Reset the list of matching files
+
+    search_dirs = [
+        os.path.expanduser("~"),  # Current user's home directory
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
+        "C:\\Users"
+    ]
+
+    for directory in search_dirs:
+        if not os.path.exists(directory):
+            continue
+
+        speak(f"Searching in {directory}...")
+        for root, _, files in os.walk(directory):
+            for file in files:
+                if keyword.lower() in file.lower():
+                    matching_files.append(os.path.join(root, file))
+
+    if matching_files:
+        log_to_gui("Matching files found:")
+        for i, file_path in enumerate(matching_files, start=1):
+            log_to_gui(f"{i}. {file_path}")
+
+        speak(f"Found {len(matching_files)} files containing '{keyword}'. Please select a file by saying its number.")
+        choice = listen(log_to_gui).strip()
+
+        try:
+            choice_index = int(choice) - 1
+            if 0 <= choice_index < len(matching_files):
+                selected_file = matching_files[choice_index]
+                speak(f"Opening {os.path.basename(selected_file)}")
+                os.startfile(selected_file)
+            else:
+                speak("Invalid choice. Please try again.")
+        except ValueError:
+            speak("Invalid input. Please say a number.")
+    else:
+        speak(f"No files containing '{keyword}' found.")
+
+# ✅ **Main Function**
+def main(log_to_gui):
+    global assistant_running
+    assistant_running = True
+    speak("Hey bro! Just say my name to get the work done")
+    wait_for_wake_word(log_to_gui)
+
+    while assistant_running:
+        command = listen(log_to_gui)
+        if not command:
+            continue
+
+        action = match_command(command)
+
+        if action == "google":
+            query = command.replace("google", "").strip()
+            web_search(query, log_to_gui)
+
+        elif action == "youtube":
+            query = command.replace("youtube", "").replace("search", "").strip()
+            youtube_search(query, log_to_gui)
+
+        elif action == "time":
+            get_time()
+
+        elif action == "battery":
+            battery_status(log_to_gui)
+
+        elif action == "joke":
+            tell_joke()
+
+        elif action == "whatsapp":
+            send_whatsapp_message(log_to_gui)
+
+        elif action == "open":
+            app_name = command.replace("open", "").strip()
+            open_application(app_name, log_to_gui)
+
+        elif action == "close":
+            app_name = command.replace("close", "").strip()
+            close_application(app_name, log_to_gui)
+
+        elif action == "local search":
+            keyword = command.replace("local search", "").strip()
+            local_search(keyword, log_to_gui)
+
+        elif action == "exit":
+            speak("Goodbye, bro!")
+            wait_for_wake_word(log_to_gui)
+
+        elif action == "khatam":
+            speak("Okk bhai, take care")
+            assistant_running = False
+            sys.exit()
+
+        else:
+            log_to_gui("I didn't get that, bro. Try again!")
+
+# ✅ **GUI Function**
+def gui():
+    global assistant_running
+
+    root = tk.Tk()
+    root.title("Xeno Assistant")
+    root.geometry("1000x700")
+    root.configure(bg="#F0F0F0")  # Light background color
+    root.resizable(True, True)  # Make the window resizable
+
+    # Custom font
+    custom_font = ("Helvetica", 12)
+
+    # ✅ Top Section
+    top_frame = tk.Frame(root, bg="#F0F0F0")
+    top_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+    # Left Side: Commands List and Buttons
+    left_frame = tk.Frame(top_frame, bg="#FFFFFF", bd=2, relief="ridge")
+    left_frame.pack(side="left", fill="y", padx=5, pady=5)
+
+    commands_label = tk.Label(left_frame, text="Commands", font=("Helvetica", 14, "bold"), bg="#FFFFFF", fg="#333333")
+    commands_label.pack(pady=10)
+
+    commands_text = tk.Text(left_frame, wrap=tk.WORD, width=30, height=15, font=custom_font, bg="#FFFFFF", fg="#333333")
+    commands_text.pack(padx=10, pady=10)
+
+    commands = """
+    - "Google [query]": Search the web.
+    - "YouTube [query]": Search YouTube.
+    - "Time": Get the current time.
+    - "Battery": Check battery status.
+    - "Joke": Tell a random joke.
+    - "Open [app name]": Open an application.
+    - "Close [app name]": Close an application.
+    - "Local search [keyword]": Search for files locally.
+    - "WhatsApp": Send a WhatsApp message.
+    - "Exit": Exit the assistant.
+    - "Khatam": Shut down the assistant.
+    """
+    commands_text.insert(tk.END, commands)
+    commands_text.config(state="disabled")  # Make it read-only
+
+    # Buttons in Left Frame
+    button_frame = tk.Frame(left_frame, bg="#FFFFFF")
+    button_frame.pack(pady=10)
+
+    def start_assistant():
+        global assistant_running
+        if not assistant_running:
+            assistant_running = True
+            threading.Thread(target=main, args=(log_to_gui,)).start()
+            start_button.config(state="disabled")
+            stop_button.config(state="normal")
+            status_label.config(text="Status: Running", fg="#4CAF50")
+        else:
+            status_label.config(text="Status: Already Running", fg="#FF0000")
+
+    start_button = tk.Button(button_frame, text="Start Assistant", command=start_assistant, font=custom_font, bg="#4CAF50", fg="#FFFFFF", bd=0)
+    start_button.pack(side="left", padx=5, pady=5, ipadx=20, ipady=10)
+
+    def stop_assistant():
+        global assistant_running
+        if assistant_running:
+            assistant_running = False
+            status_label.config(text="Status: Stopped", fg="#FF0000")
+            start_button.config(state="normal")
+            stop_button.config(state="disabled")
+        else:
+            status_label.config(text="Status: Not Running", fg="#FF0000")
+
+    stop_button = tk.Button(button_frame, text="Stop Assistant", command=stop_assistant, font=custom_font, bg="#FF0000", fg="#FFFFFF", bd=0, state="disabled")
+    stop_button.pack(side="left", padx=5, pady=5, ipadx=20, ipady=10)
+
+    # Status Label
+    status_label = tk.Label(button_frame, text="Status: Not Running", font=custom_font, fg="#333333", bg="#FFFFFF")
+    status_label.pack(side="left", padx=10, pady=5)
+
+    # Exit Button
+    def exit_app():
+        global assistant_running
+        assistant_running = False
+        root.destroy()
+
+    exit_button = tk.Button(button_frame, text="Exit Program", command=exit_app, font=custom_font, bg="#333333", fg="#FFFFFF", bd=0)
+    exit_button.pack(side="right", padx=5, pady=5, ipadx=20, ipady=10)
+
+    # Right Side: Output Log
+    right_frame = tk.Frame(top_frame, bg="#FFFFFF", bd=2, relief="ridge")
+    right_frame.pack(side="right", fill="both", expand=True, padx=5, pady=5)
+
+    output_label = tk.Label(right_frame, text="Output", font=("Helvetica", 14, "bold"), bg="#FFFFFF", fg="#333333")
+    output_label.pack(pady=10)
+
+    output_log = scrolledtext.ScrolledText(right_frame, wrap=tk.WORD, width=60, height=20, font=custom_font, bg="#FFFFFF", fg="#333333")
+    output_log.pack(padx=10, pady=10, fill="both", expand=True)
+
+    def log_to_gui(message):
+        """Logs messages to the GUI output log."""
+        output_log.insert(tk.END, message + "\n")
+        output_log.see(tk.END)
+
+    # ✅ Function to check if the window is closed
+    def on_closing():
+        global assistant_running
+        assistant_running = False
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+
+    root.mainloop()
+
+# ✅ Run GUI
+if __name__ == "__main__":
+    gui()
